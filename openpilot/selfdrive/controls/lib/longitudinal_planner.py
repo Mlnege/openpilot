@@ -50,7 +50,19 @@ def get_coast_accel(pitch):
 class LongitudinalPlanner:
   def __init__(self, CP, init_v=0.0, init_a=0.0, dt=DT_MDL):
     self.CP = CP
-    self.mpc = LongitudinalMpc(dt=dt)
+    self.actuator_accel_limits = None
+    if (getattr(CP, 'brand', '') == 'toyota' and
+        getattr(CP, 'carFingerprint', '') == 'TOYOTA_RAV4_TSS2_2022' and
+        getattr(CP, 'openpilotLongitudinalControl', False)):
+      from opendbc.car.toyota.interface import CarInterface
+      # 수신·진단이나 차량 설정 변경 없이 기존 인터페이스의 송신 명령 한계를 읽는다.
+      limits = CarInterface.get_pid_accel_limits(CP, init_v, 0.0)
+      self.actuator_accel_limits = LongitudinalMpc.validate_actuator_accel_limits(limits)
+      if self.actuator_accel_limits is None:
+        raise ValueError("RAV4 직접 가감속의 송신 명령 한계를 읽지 못했습니다")
+      self.mpc = LongitudinalMpc(dt=dt, actuator_accel_limits=self.actuator_accel_limits)
+    else:
+      self.mpc = LongitudinalMpc(dt=dt)
     self.fcw = False
     # VW MEB(ID.4/ID.5)에서만 True. 가속 오버라이드 중 출발 FCW 오탐을 끄기 위한 게이트.
     self.is_vw_meb = is_volkswagen_meb(CP)
@@ -254,6 +266,8 @@ class LongitudinalPlanner:
       ),
       lead_track_frames=lead_track_frames,
       measured_a_ego=sm['carState'].aEgo,
+      # 검증 범위는 정확한 RAV4 2022의 직접 종방향 제어로 제한한다.
+      force_slow_decel=force_slow_decel and self.actuator_accel_limits is not None,
     )
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
@@ -367,6 +381,9 @@ class LongitudinalPlanner:
                          force_slow_decel, coasting_turn_blocked, cutin_predecel_limit)
     self.apply_signal_stop_prepare(sm, carrot, reset_state)
     self.apply_signal_start_guard(carrot)
+    if self.actuator_accel_limits is not None:
+      # preview·신호 보조 후에도 최종 목표는 실제 송신 가능한 명령 범위에 둔다.
+      self.output_a_target = float(np.clip(self.output_a_target, *self.actuator_accel_limits))
 
   def apply_signal_stop_prepare(self, sm, carrot, reset_state, now=None):
     import time

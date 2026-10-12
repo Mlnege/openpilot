@@ -26,6 +26,15 @@ A radar fitted to the vehicle does not guarantee that carrotpilot can read the r
 
 On non-CAN FD Hyundai/Kia vehicles, a positive value normally attempts to enable radar tracks during startup and stores the result in `EnableRadarTracksResult`. The Bosch receive path below is an exception; for other configurations requiring activation, confirm both the activation result and actual incoming tracks.
 
+<a id="rav4-ars510"></a>
+### Toyota RAV4 Hybrid 2022 ARS510 reception
+
+This receive path applies only to Toyota `TOYOTA_RAV4_TSS2_2022` with the existing `RADAR_ACC` capability and uses the `fused` profile. It adds no setting key. When the supported code declares radar reception available, Toyota front-radar/vision matching automatically uses mode `1`. Selecting `EnableRadarTracks=2` does not enable the same SCC or corner-radar features as on Hyundai.
+
+Tracks come from assembled, CRC-checked CAN object records. Before the first valid record, empty tracks leave lead selection to vision; a gap longer than 0.5 seconds after valid reception reports temporary unavailability. The disappearance of `Vision Only` does not prove actual object reception or vehicle compatibility. These are front-radar objects; the path adds neither Toyota blind-spot tracks nor another manufacturer's corner-radar objects.
+
+Validation uses recorded inputs with control disabled and separate offline computation tests. This receive patch does not change longitudinal-control selection, existing ECU initialization, or Panda safety policy. Physical radar hardware/firmware, PCS/AEB preservation, regenerative braking, and vehicle braking response remain unverified. See the [Korean RAV4 ARS510 technical report](../../rav4_ars510_compatibility.md) for the exact scope.
+
 <a id="bosch-passive-reception"></a>
 ### Bosch MRRevo14F passive reception exception
 

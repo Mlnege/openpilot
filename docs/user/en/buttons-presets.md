@@ -171,6 +171,8 @@ Scope and exclusions:
 
 With `SpeedFromPCM=3`, stock SET/RES speed becomes Carrot's base target. Mode `1` also uses stock set speed; `0` and `2` retain the existing Carrot speed selection. This setting does not switch between stock ACC and openpilot longitudinal control or enable/disable radar. With openpilot longitudinal control, lead, curve, and camera deceleration can lower the target further.
 
+Mode `0` has one exception: exact `TOYOTA_RAV4_TSS2_2022` with PCM, openpilot direct longitudinal control, and valid CAN. An observed disabled-to-enabled transition or stock set-speed change updates Carrot's base target. An initially enabled sample only establishes a reference; local button or Bluetooth input has priority in the same frame. This does not add RES/SET CAN transmission, and lower targets from leads, curves, maps, or cameras still apply. Other vehicles, stock longitudinal control, and mode `2` retain their existing behavior.
+
 <a id="speed-presets"></a>
 ## 4. Speed presets
 

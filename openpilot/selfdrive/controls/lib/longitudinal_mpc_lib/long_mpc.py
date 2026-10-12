@@ -3,7 +3,7 @@ import os
 import time
 import numpy as np
 from openpilot.cereal import log
-from opendbc.car.interfaces import ACCEL_MIN
+from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.realtime import DT_MDL
 from openpilot.common.swaglog import cloudlog
 # WARNING: imports outside of constants will not trigger a rebuild
@@ -244,7 +244,9 @@ def gen_long_ocp():
 
 
 class LongitudinalMpc:
-  def __init__(self, mode='acc', dt=DT_MDL):
+  def __init__(self, mode='acc', dt=DT_MDL, *, actuator_accel_limits=None):
+    self.actuator_accel_limits = self.validate_actuator_accel_limits(actuator_accel_limits)
+    self.minimum_accel = ACCEL_MIN if self.actuator_accel_limits is None else self.actuator_accel_limits[0]
     self.mode = mode
     self.dt = dt
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
@@ -262,6 +264,21 @@ class LongitudinalMpc:
     self.base_desired_distances = np.zeros(2)
     self.lead_danger_factor = LEAD_DANGER_FACTOR
     self.predicted_danger_margin = 1e3
+
+  @staticmethod
+  def validate_actuator_accel_limits(limits):
+    """실측 마찰 보장이 아닌 송신 명령 한계이며 잘못된 값은 추정하지 않고 거절한다."""
+    if limits is None:
+      return None
+    try:
+      if len(limits) != 2 or any(isinstance(value, (bool, np.bool_)) for value in limits):
+        raise ValueError
+      minimum, maximum = (float(value) for value in limits)
+    except (TypeError, ValueError, OverflowError) as exc:
+      raise ValueError("가속도 명령 한계는 유효한 최소·최대 한 쌍이어야 합니다") from exc
+    if not (np.isfinite(minimum) and np.isfinite(maximum) and ACCEL_MIN <= minimum < 0.0 < maximum <= ACCEL_MAX):
+      raise ValueError("가속도 명령 한계의 부호·유한성·기존 허용 범위를 확인할 수 없습니다")
+    return minimum, maximum
 
 
   def reset(self):
@@ -380,7 +397,7 @@ class LongitudinalMpc:
 
     # MPC will not converge if immediate crash is expected
     # Clip lead distance to what is still possible to brake for
-    min_x_lead = ((v_ego + v_lead)/2) * (v_ego - v_lead) / (-ACCEL_MIN * 2)
+    min_x_lead = ((v_ego + v_lead)/2) * (v_ego - v_lead) / (-self.minimum_accel * 2)
     x_lead = np.clip(x_lead, min_x_lead, 1e8)
     v_lead = np.clip(v_lead, 0.0, 1e8)
     a_lead = np.clip(a_lead, -10., 5.)
@@ -392,7 +409,7 @@ class LongitudinalMpc:
     # TODO this sets a max accel limit, but the minimum limit is only for cruise decel
     # needs refactor
     self.cruise_min_a = min_a
-    self.max_a = max_a
+    self.max_a = max_a if self.actuator_accel_limits is None else min(max_a, self.actuator_accel_limits[1])
 
   def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j,
              personality=log.LongitudinalPersonality.standard,
@@ -403,7 +420,8 @@ class LongitudinalMpc:
              lead_gap_enabled=False,
              lead_track_frames=(0, 0),
              measured_a_ego=0.0,
-             cutout_relief_enabled=False):
+             cutout_relief_enabled=False,
+             force_slow_decel=False):
     v_ego = self.x0[1]
     a_ego = self.x0[2]
     self.status = radarstate.leadOne.status or radarstate.leadTwo.status
@@ -426,13 +444,17 @@ class LongitudinalMpc:
     else:
       v_cruise, stop_x, mode = carrot.v_cruise, carrot.stop_dist, carrot.mode
 
+    if force_slow_decel:
+      # 호스트 감속 요청은 당근 목표 속도를 읽은 뒤에도 유지한다.
+      v_cruise = 0.0
+
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
     # and then treat that as a stopped car/obstacle at this new distance.
     lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
     lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
 
-    self.params[:,0] = ACCEL_MIN if not reset_state else a_ego
+    self.params[:,0] = self.minimum_accel if not reset_state else a_ego
     # negative accel constraint causes problems because negative speed is not allowed
     self.params[:,1] = max(0.0, self.max_a if not reset_state else a_ego)
 
