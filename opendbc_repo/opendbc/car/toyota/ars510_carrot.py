@@ -105,6 +105,8 @@ class StrictId80RecordAssembler(Id80RecordAssembler):
 class Ars510RadarInterface(RadarInterfaceBase):
   """원형 fused 결과를 실제 Carrot RadarData와 MyTrack 처리에 연결한다."""
 
+  ARS510_INPUT_RECOVERY_API = 1
+
   def __init__(self, CP):
     if not is_supported_ars510(CP):
       raise ValueError("ARS510 수신기는 Toyota RAV4 TSS2 2022 RADAR_ACC만 지원합니다")
@@ -139,6 +141,18 @@ class Ars510RadarInterface(RadarInterfaceBase):
     decoder._assembler = StrictId80RecordAssembler()
     return decoder
 
+  def recover_from_input_fault(self, previous):
+    """재구성 후에도 오류를 유지한다. 이전 객체·필터는 정상 기록까지 재사용하지 않는다."""
+    if not isinstance(previous, Ars510RadarInterface):
+      raise ValueError("ARS510 복구 상태는 같은 수신기에서만 전달할 수 있습니다")
+    self._seen_record = self._seen_record or previous._seen_record
+    # 새 namespace가 이전 정상 객체나 아직 소진 중인 번호 경계로 돌아가지 않게 한다.
+    self._max_track_id = max(self._max_track_id, self._namespace_offset - 1,
+                             previous._max_track_id, previous._namespace_offset - 1)
+    self._fault_latched = True
+    self._reset_history()
+    self._counters["input_recovery_resets"] += 1
+
   @property
   def diagnostics(self):
     """재초기화 전후를 합친 관측 수치이며 실차 안전 검증 결과는 아니다."""
@@ -158,7 +172,7 @@ class Ars510RadarInterface(RadarInterfaceBase):
                 "published_records", "published_points", "invalid_points", "received_id80_frames",
                 "invalid_native_record", "invalid_packet_time", "nonfinite_input", "reversed_receive_time",
                 "support_frame_length", "support_checksum_errors", "invalid_frame_data", "ambiguous_batch_time", "invalid_track_id",
-                "cold_start_publications", "cold_start_warnings"):
+                "cold_start_publications", "cold_start_warnings", "input_recovery_resets"):
       values.setdefault(key, 0)
     return dict(values)
 

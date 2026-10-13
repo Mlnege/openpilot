@@ -457,3 +457,67 @@ def test_downstream_int32_id_limit_does_not_wrap(radar, offset, rejected):
     assert radar.diagnostics["invalid_track_id"] == 1
   else:
     assert result.points[0].trackId == 2**31 - 1
+
+
+def test_input_fault_recovery_preserves_seen_state_until_new_crc_record(CP, radar):
+  first_id = run_record(radar).points[0].trackId
+  previous_diagnostics = radar.diagnostics.copy()
+  before = cp_wire(CP)
+  restarted = Ars510RadarInterface(CP)
+  restarted.recover_from_input_fault(radar)
+  assert restarted._seen_record and restarted._fault_latched
+  assert not restarted.pts and not restarted.tracks
+  assert restarted.diagnostics["input_recovery_resets"] == 1
+
+  emitted = []
+  for index in range(80):
+    time_ns = 1_040_000_000 + index * 10_000_000
+    result = restarted.update_carrot(15.0, 0.0, time_ns * 1e-9, [(time_ns, [speed_frame()])])
+    if result is not None:
+      emitted.append(result)
+      assert_input_error(result, restarted)
+  assert len(emitted) == 16
+  assert restarted.diagnostics["cold_start_publications"] == 0
+  partial = packets_for(synthetic_record(1), 1.9)[:3]
+  result = restarted.update_carrot(15.0, 0.0, 1.9006, partial)
+  assert result is None or (result.errors.canError and result.errors.radarUnavailableTemporary)
+  assert not restarted.pts and not restarted.tracks
+
+  recovered = run_record(restarted, 2, start=2.0)
+  assert not any(recovered.errors.to_dict().values())
+  assert recovered.points[0].trackId > first_id
+  assert restarted.tracks[recovered.points[0].trackId].cnt == 1
+  assert radar.diagnostics == previous_diagnostics
+  assert cp_wire(CP) == before
+
+
+def test_input_fault_during_cold_start_does_not_claim_healthy_empty_state(CP, radar):
+  restarted = Ars510RadarInterface(CP)
+  restarted.recover_from_input_fault(radar)
+  assert not restarted._seen_record and restarted._fault_latched
+  reports = [restarted.update_carrot(15.0, 0.0, 1.0 + index * .01, []) for index in range(10)]
+  assert sum(value is not None for value in reports) == 2
+  for result in reports:
+    if result is not None:
+      assert_input_error(result, restarted)
+  assert restarted.diagnostics["cold_start_publications"] == 0
+  recovered = run_record(restarted, start=1.2)
+  assert len(recovered.points) == 1 and not any(recovered.errors.to_dict().values())
+
+
+def test_input_fault_recovery_preserves_exhausted_int32_namespace(CP, radar):
+  # 실제 번호 소진 경계의 fixture이며 CAN 신호·객체·판정 함수를 대체하지 않는다.
+  radar._max_track_id = 2**31 - 1
+  radar._namespace_offset = 2**31
+  restarted = Ars510RadarInterface(CP)
+  restarted.recover_from_input_fault(radar)
+  assert restarted._namespace_offset == 2**31
+  assert_input_error(run_record(restarted), restarted)
+  assert restarted.diagnostics["invalid_track_id"] == 1
+  assert restarted._namespace_offset == 2**31
+
+
+def test_input_fault_recovery_rejects_an_unrelated_receiver(radar):
+  with pytest.raises(ValueError, match="같은 수신기"):
+    radar.recover_from_input_fault(object())
+  assert not radar._fault_latched and not radar.pts and not radar.tracks

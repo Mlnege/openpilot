@@ -386,9 +386,10 @@ class LongitudinalPlanner:
                          force_slow_decel, coasting_turn_blocked, cutin_predecel_limit)
     self.apply_signal_stop_prepare(sm, carrot, reset_state)
     self.apply_signal_start_guard(carrot)
-    if self.actuator_accel_limits is not None:
+    actuator_accel_limits = getattr(self, 'actuator_accel_limits', None)
+    if actuator_accel_limits is not None:
       # preview·신호 보조 후에도 최종 목표는 실제 송신 가능한 명령 범위에 둔다.
-      self.output_a_target = float(np.clip(self.output_a_target, *self.actuator_accel_limits))
+      self.output_a_target = float(np.clip(self.output_a_target, *actuator_accel_limits))
 
   def apply_signal_stop_prepare(self, sm, carrot, reset_state, now=None):
     now = time.monotonic() if now is None else now
