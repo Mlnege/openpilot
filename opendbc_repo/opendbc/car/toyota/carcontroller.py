@@ -200,6 +200,12 @@ class CarController(CarControllerBase):
 
         # internal PCM gas command can get stuck unwinding from negative accel so we apply a generous rate limit
         pcm_accel_cmd = actuators.accel
+        stopping_nonpositive = (self.CP.carFingerprint == CAR.TOYOTA_RAV4_TSS2_2022 and CC.longActive
+                                and stopping and actuators.accel <= 0.0)
+        if stopping_nonpositive:
+          # 명시한 정지 요청에서 이전 양수 가속·적분이 새 가속 명령으로 남지 않게 한다.
+          self.prev_accel = min(self.prev_accel, 0.0)
+          self.long_pid.i = min(self.long_pid.i, 0.0)
         if CC.longActive:
           pcm_accel_cmd = rate_limit(pcm_accel_cmd, self.prev_accel, ACCEL_WINDDOWN_LIMIT, ACCEL_WINDUP_LIMIT)
         self.prev_accel = pcm_accel_cmd
@@ -227,12 +233,19 @@ class CarController(CarControllerBase):
         if CC.longActive:
           # constantly slowly unwind integral to recover from large temporary errors
           self.long_pid.i -= ACCEL_PID_UNWIND * float(np.sign(self.long_pid.i))
+          if stopping_nonpositive:
+            # 작은 음수 적분을 풀다가 0 위로 넘기는 경우도 정지 중에는 막는다.
+            self.long_pid.i = min(self.long_pid.i, 0.0)
 
           error_future = pcm_accel_cmd - a_ego_future
           pcm_accel_cmd = self.long_pid.update(error_future,
                                                speed=CS.out.vEgo,
                                                feedforward=pcm_accel_cmd,
                                                freeze_integrator=actuators.longControlState != LongCtrlState.pid)
+          if stopping_nonpositive:
+            # P/D 보정도 정지 중 양수 CAN을 만들 수 있으므로 실제 명령값과 동기화한다.
+            pcm_accel_cmd = min(pcm_accel_cmd, 0.0)
+            self.long_pid.control = pcm_accel_cmd
         else:
           self.long_pid.reset()
 

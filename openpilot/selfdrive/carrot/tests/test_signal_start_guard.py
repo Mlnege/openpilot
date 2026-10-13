@@ -227,7 +227,7 @@ def test_production_output_veto_after_mpc_and_coasting(hold, accel):
   update = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == 'update')
   ns = {}
   exec(compile(ast.Module([method], type_ignores=[]), str(path), 'exec'), ns)
-  p = NS(output_should_stop=False, output_v_target_now=2., output_a_target=accel)
+  p = NS(output_should_stop=False, output_v_target_now=2., output_a_target=accel, actuator_accel_limits=None)
   p.apply_signal_start_guard = lambda carrot: ns['apply_signal_start_guard'](p, carrot)
   # Execute the real last output operations, including the preceding coast call.
   p.update_coasting = lambda *a: setattr(p, 'output_a_target', accel)
